@@ -1,6 +1,6 @@
 ---
 name: content-writer
-description: Comprehensive content writing skill for generating, editing, optimizing, and researching content across any format (blog posts, landing pages, emails, social, press releases, case studies, whitepapers, technical docs, scripts, and more). Use when the user asks to write, rewrite, edit, optimize for SEO, summarize, research, condense, or refine any piece of content, or when they need a senior content writer's judgment on tone, structure, audience, or strategy. Maintains a professional, humane, conversational tone and focuses on content quality, SEO performance, engagement, and conversion. Works collaboratively: drafts, presents, and iterates with the user.
+description: "Comprehensive content writing skill for generating, editing, optimizing, and researching content across any format (blog posts, landing pages, emails, social, press releases, case studies, whitepapers, technical docs, scripts, and more). Use when the user asks to write, rewrite, edit, optimize for SEO, summarize, research, condense, or refine any piece of content, or when they need a senior content writer's judgment on tone, structure, audience, or strategy. Maintains a professional, humane, conversational tone and focuses on content quality, SEO performance, engagement, and conversion. Works collaboratively: drafts, presents, and iterates with the user."
 ---
 
 # Content Writer Skill: Agent Behavior Guide
