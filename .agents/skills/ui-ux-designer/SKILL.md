@@ -36,7 +36,7 @@ When justifying design recommendations, prioritize sources of truth in this orde
 
 ## 2. Request Classification & Reference Routing
 
-Do not guess or hallucinate guidelines. Query the appropriate reference file inside `references/` for deep, authoritative design details before responding.
+Do not guess or hallucinate guidelines. Use the `Read` tool to load the relevant reference file inside `references/` for deep, authoritative design details before responding.
 
 | Category | Reference Files to Read |
 |---|---|
