@@ -15,7 +15,7 @@ Public API:
 import re
 import json
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 
 TIER3_VERBS = [
@@ -44,415 +44,535 @@ VARIANT_MAP = {
 }
 
 
-def inject_keywords(latex: str, injection_map: dict, mode: Literal["ats-max", "designer-polish"]) -> str:
-    """Inject keywords at specified locations from keyword-injection-map.json"""
-    injections = injection_map.get('injections', [])
-    if not injections:
+# NDA abstraction levels
+NDA_LEVELS = {
+    "L0": "full",           # Full transparency: company, metrics, details
+    "L1": "company-abstracted",   # Domain, metrics, no company name
+    "L2": "domain-abstracted",    # Function, metrics, no domain
+    "L3": "pattern-abstracted",   # Method, directional metric only
+    "L4": "blackout",      # Process only, no specifics
+}
+
+
+SECTION_ORDER = {
+    "ats-max": [
+        "Professional Summary",
+        "Skills",
+        "Work Experience",
+        "Education",
+        "Certifications",
+        "Projects",
+    ],
+    "designer-polish": [
+        "Professional Summary",
+        "Skills",
+        "Work Experience",
+        "Projects",
+        "Education",
+        "Certifications",
+    ],
+    "software-engineer": [
+        "Professional Summary",
+        "Technical Skills",
+        "Work Experience",
+        "Projects",
+        "Education",
+        "Certifications",
+    ],
+    "product-manager": [
+        "Professional Summary",
+        "Core Competencies",
+        "Work Experience",
+        "Key Achievements",
+        "Education",
+        "Certifications",
+    ],
+    "engineering-leadership": [
+        "Professional Summary",
+        "Leadership Scope",
+        "Work Experience",
+        "Key Achievements",
+        "Education",
+        "Certifications",
+    ],
+}
+
+
+AUDIENCE_REWRITE_MAP = {
+    "hr": {
+        "patterns": [
+            (r'\b(MVP|PoC|CI/CD|API|SDK|K8s|Docker)\b', r'\1 (industry standard)'),
+            (r'\b(React|TypeScript|Python|Go|Java)\b', r'\1 (programming language)'),
+            (r'\b(A/B test|experiment|p-value)\b', r'A/B experiment with statistical rigor'),
+        ],
+        "focus": "keywords, outcomes, role clarity",
+    },
+    "hiring_manager": {
+        "patterns": [
+            (r'\bteam\b', r'cross-functional team'),
+            (r'\bled\b', r'led team of'),
+            (r'\bdelivered\b', r'delivered on time'),
+        ],
+        "focus": "scope, team size, timeline, budget, users",
+    },
+    "tech_lead": {
+        "patterns": [
+            (r'\b(refactored|optimized|architected)\b', r'\1 with measurable impact'),
+            (r'\b(scaled|migrated)\b', r'\1 with zero downtime'),
+        ],
+        "focus": "method, tools, statistical rigor, architectural decisions",
+    },
+    "executive": {
+        "patterns": [
+            (r'\b(\$?\d+(?:\.\d+)?[KMB]?)\b', r'\1 business impact'),
+            (r'\b(\d+%)\b', r'\1 improvement'),
+        ],
+        "focus": "revenue, users, risk, speed, strategic outcomes",
+    },
+}
+
+
+def calibrate_density(latex: str, targets: dict, mode: Literal["ats-max", "designer-polish"] = "designer-polish") -> str:
+    """
+    Adjust keyword density to hit target ranges.
+    - If under target: inject keyword at natural locations
+    - If over target: replace with variants from VARIANT_MAP
+    """
+    if not targets:
         return latex
 
-    # First, handle Summary section
-    for inj in injections:
-        kw = inj['keyword']
-        locations = inj['locations']
+    text = latex
 
-        if 'summary' in locations:
-            latex = inject_into_summary(latex, kw, inj.get('variant', kw))
+    for keyword, target in targets.items():
+        priority = target.get('priority', 'medium')
+        min_density = target.get('min', 1.0)
+        max_density = target.get('max', 2.5)
 
-        if 'skills' in locations:
-            latex = inject_into_skills(latex, kw, inj.get('variant', kw))
+        current_density = _calculate_density(text, keyword)
 
-        for loc in locations:
-            if loc.startswith('experience:'):
-                idx = int(loc.split(':')[1])
-                latex = inject_into_experience(latex, kw, idx, inj.get('variant', kw))
+        if current_density < min_density:
+            # Under target - inject keyword
+            text = _inject_for_density(text, keyword, min_density - current_density, mode)
+        elif current_density > max_density:
+            # Over target - replace with variants
+            text = _replace_with_variants(text, keyword, current_density - max_density)
 
-    return latex
-
-
-def inject_into_summary(latex: str, keyword: str, variant: str) -> str:
-    """Inject keyword into Professional Summary — add to existing sentence or as new \\kw{}"""
-    pattern = r'(\\section\*\{Professional Summary\}(?:.*?))'
-    match = re.search(pattern, latex, re.DOTALL)
-    if not match:
-        return latex
-
-    summary_text = match.group(1)
-    # Check if already present
-    if keyword.lower() in summary_text.lower() or variant.lower() in summary_text.lower():
-        return latex
-
-    # Find a sentence to inject into, or add \kw{} macro
-    # Simple approach: inject before final period of first sentence
-    sentences = re.split(r'(?<=[.!?])\s+', summary_text.strip())
-    if sentences:
-        first = sentences[0]
-        # Inject before period
-        new_first = first.rstrip('.') + f' in {variant}.' if 'in ' not in first.lower() else first.rstrip('.') + f' with {variant}.'
-        summary_text = summary_text.replace(first, new_first, 1)
-        latex = latex.replace(match.group(1), summary_text)
-    return latex
+    return text
 
 
-def inject_into_skills(latex: str, keyword: str, variant: str) -> str:
-    """Add keyword to Skills section — find appropriate category bullet"""
-    section_match = re.search(r'(\\section\*\{Skills\}(?:.*?))(?:\\section|\Z)', latex, re.DOTALL)
-    if not section_match:
-        return latex
-
-    skills_text = section_match.group(1)
-    if keyword.lower() in skills_text.lower() or variant.lower() in skills_text.lower():
-        return latex
-
-    # Determine category
-    category = categorize_keyword(keyword)
-    pattern = rf'(\\item\s+\\textbf\{{{{{re.escape(category)}}}:}})'
-    match = re.search(pattern, skills_text)
-    if match:
-        # Add to existing category line
-        line = match.group(0)
-        new_line = line.replace(r'\kw{', f'\\kw{{{variant}}}, ')
-        skills_text = skills_text.replace(line, new_line, 1)
-    else:
-        # Add new category bullet - use lambda to avoid backslash issues
-        new_bullet = f'\n\\item \\textbf{{{category}:}} \\kw{{{variant}}}'
-        def add_bullet(m):
-            return m.group(1) + new_bullet + m.group(2)
-        skills_text = re.sub(r'(\\section\*\{Skills\}.*?)(\\section|\Z)', add_bullet, skills_text, flags=re.DOTALL)
-
-    return latex.replace(section_match.group(1), skills_text)
-
-
-def inject_into_experience(latex: str, keyword: str, role_index: int, variant: str) -> str:
-    """Inject keyword into specific experience bullet"""
-    sections = re.split(r'(\\section\*\{Work Experience\})', latex)
-    if len(sections) < 2:
-        return latex
-
-    exp_section = sections[2]  # Content after header
-    # Find role entries
-    roles = re.findall(r'(\\roleentry\{[^}]+\}\{[^}]+\}\{[^}]+\}\{[^}]+\}\{(?:[^}]*\}))', exp_section)
-    if role_index >= len(roles):
-        return latex
-
-    # Find bullets in this role
-    role_content = roles[role_index]
-    bullets = re.findall(r'(\\bulletitem\s*(?:\{[^}]+\}|[^\n]*))', role_content)
-
-    # Inject into first bullet that doesn't already have keyword
-    for i, bullet in enumerate(bullets):
-        if keyword.lower() not in bullet.lower() and variant.lower() not in bullet.lower():
-            # Inject naturally
-            new_bullet = bullet.replace('.', f' using {variant}.').replace(';', f'; leveraging {variant}')
-            role_content = role_content.replace(bullet, new_bullet, 1)
-            break
-
-    # Reconstruct
-    new_exp_section = exp_section.replace(roles[role_index], role_content)
-    new_latex = sections[0] + sections[1] + new_exp_section
-    for s in sections[3:]:
-        new_latex += s
-    return new_latex
-
-
-def categorize_keyword(keyword: str) -> str:
-    kw = keyword.lower()
-    if kw in ['figma', 'sketch', 'framer', 'principle', 'protopie', 'adobe xd', 'zeplin', 'invision', 'miro', 'figjam']:
-        return 'Design'
-    if kw in ['design systems', 'design tokens', 'storybook', 'style dictionary', 'component library', 'design ops']:
-        return 'Systems'
-    if kw in ['react', 'typescript', 'javascript', 'html', 'css', 'sass', 'less', 'tailwind', 'styled-components', 'emotion', 'next.js', 'vite', 'webpack']:
-        return 'Technical'
-    if kw in ['mixpanel', 'amplitude', 'heap', 'looker', 'tableau', 'mode', 'sql', 'python', 'r', 'a/b testing', 'experimentation']:
-        return 'Analytics'
-    if kw in ['wcag', 'wcag 2.1', 'wcag 2.2', 'section 508', 'aria', 'screen reader', 'nvda', 'jaws', 'voiceover']:
-        return 'Accessibility'
-    if kw in ['cross-functional', 'stakeholder management', 'mentor', 'coach', 'design review', 'roadmap', 'prioritization', 'raci']:
-        return 'Leadership'
-    if kw in ['fintech', 'payments', 'banking', 'kyc', 'aml', 'pci-dss', 'b2b saas', 'marketplace', 'ecommerce', 'healthtech', 'edtech']:
-        return 'Domain'
-    return 'Skills'
-
-
-def calibrate_density(latex: str, targets: dict, mode: Literal["ats-max", "designer-polish"]) -> str:
-    """Iterative fine-tuning: add/remove/replace until all in [min, max]"""
-    text = latex_to_plain(latex)
-    max_iterations = 3
-
-    for _ in range(max_iterations):
-        all_ok = True
-        for kw, target in targets.items():
-            actual = keyword_density(text, kw)
-            if actual < target['min']:
-                latex = inject_for_density(latex, kw, target['min'] - actual)
-                text = latex_to_plain(latex)
-                all_ok = False
-            elif actual > target['max'] and actual > 3.5:
-                latex = reduce_density(latex, kw)
-                text = latex_to_plain(latex)
-                all_ok = False
-        if all_ok:
-            break
-    return latex
-
-
-def keyword_density(text: str, keyword: str) -> float:
+def _calculate_density(text: str, keyword: str) -> float:
+    """Calculate keyword density percentage in text."""
     words = re.findall(r'\b\w+\b', text.lower())
     total = len(words)
     if total == 0:
         return 0.0
     kw_words = len(keyword.split())
-    count = text.lower().count(keyword.lower())
+    count = len(re.findall(rf'\b{re.escape(keyword.lower())}\b', text.lower()))
     return (count * kw_words / total) * 100
 
 
-def latex_to_plain(latex: str) -> str:
-    text = re.sub(r'%.*', '', latex)
-    text = re.sub(r'\\(kw|metric|signaltag|textbf|textit|emph)\{([^}]*)\}', r'\2', text)
-    text = re.sub(r'\\[a-zA-Z]+\*?(?:\[[^]]*\])?(?:\{[^}]*\})?', ' ', text)
-    text = re.sub(r'[{}]', ' ', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
+def _inject_for_density(latex: str, keyword: str, deficit: float, mode: str) -> str:
+    """Inject keyword into natural locations to reach target density."""
+    # Determine how many injections needed
+    word_count = len(re.findall(r'\b\w+\b', latex))
+    injections_needed = max(1, int((deficit / 100) * word_count / len(keyword.split())))
 
+    locations = ['summary', 'skills']
+    if mode == "ats-max":
+        locations += ['experience:0', 'experience:1']
+    else:
+        locations += ['experience:0', 'experience:1', 'experience:2']
 
-def inject_for_density(latex: str, keyword: str, deficit: float) -> str:
-    """Add keyword occurrences — try variants first"""
-    variant = get_variant(keyword)
-    if variant != keyword and variant.lower() not in latex.lower():
-        return inject_keyword_once(latex, variant)
-    return inject_keyword_once(latex, keyword)
+    variant = VARIANT_MAP.get(keyword.lower(), [keyword])[0]
 
+    for i, loc in enumerate(locations[:injections_needed]):
+        if loc == 'summary':
+            latex = inject_into_summary(latex, keyword, variant)
+        elif loc == 'skills':
+            latex = inject_into_skills(latex, keyword, variant)
+        elif loc.startswith('experience:'):
+            idx = int(loc.split(':')[1])
+            latex = inject_into_experience(latex, keyword, idx, variant)
 
-def inject_keyword_once(latex: str, keyword: str) -> str:
-    # Try summary first
-    latex = inject_into_summary(latex, keyword, keyword)
-    # Then skills
-    latex = inject_into_skills(latex, keyword, keyword)
     return latex
 
 
-def reduce_density(latex: str, keyword: str) -> str:
-    """Replace excess exact matches with variants"""
-    variant = get_variant(keyword)
-    if variant == keyword:
+def _replace_with_variants(latex: str, keyword: str, excess: float) -> str:
+    """Replace excess keyword occurrences with variants."""
+    variants = VARIANT_MAP.get(keyword.lower(), [keyword])
+    if len(variants) <= 1:
         return latex
 
-    # Replace in bullets/experience
-    latex = re.sub(rf'\b{re.escape(keyword)}\b', variant, latex, count=1, flags=re.IGNORECASE)
+    # Replace every Nth occurrence with a variant
+    count = 0
+    def replacer(match):
+        nonlocal count
+        count += 1
+        if count % 2 == 0:
+            return variants[count % len(variants)]
+        return match.group(0)
+
+    pattern = rf'\b{re.escape(keyword)}\b'
+    return re.sub(pattern, replacer, latex, flags=re.IGNORECASE)
+
+
+def apply_nda_abstraction(latex: str, level: str | int = "L3") -> str:
+    """
+    Apply NDA abstraction to protect confidential information.
+    Levels: L0=full, L1=company-abstracted, L2=domain-abstracted, L3=pattern-abstracted, L4=blackout
+    """
+    level_str = str(level).upper()
+    if level_str not in NDA_LEVELS:
+        level_str = "L3"
+
+    level_type = NDA_LEVELS[level_str]
+
+    if level_type == "full":
+        return latex
+
+    # Patterns to abstract
+    company_patterns = [
+        (r'\b(Google|Meta|Apple|Amazon|Microsoft|Netflix|Uber|Airbnb|Stripe|Shopify)\b',
+         lambda m: _abstract_company(m.group(1), level_type)),
+        (r'\b([A-Z][a-z]+)\s+(?:Inc|LLC|Ltd|Corp|Technologies?|Systems?)\b',
+         lambda m: _abstract_company(m.group(0), level_type)),
+    ]
+
+    metric_patterns = [
+        (r'(\$\d+(?:\.\d+)?[KMB]?)', lambda m: _abstract_metric(m.group(1), level_type)),
+        (r'(\d+(?:\.\d+)?%)\s*(?:increase|growth|improvement|reduction|conversion)',
+         lambda m: _abstract_metric(m.group(1), level_type)),
+        (r'(\d+(?:,\d{3})*(?:\.\d+)?)\s*(?:users?|customers?|merchants?|transactions?)',
+         lambda m: _abstract_metric(m.group(1), level_type)),
+    ]
+
+    result = latex
+    for pattern, replacer in company_patterns + metric_patterns:
+        result = re.sub(pattern, replacer, result)
+
+    return result
+
+
+def _abstract_company(name: str, level: str) -> str:
+    """Abstract company name based on NDA level."""
+    if level == "company-abstracted":
+        return "Series C FinTech (payments)"  # Example abstraction
+    elif level == "domain-abstracted":
+        return "B2B SaaS platform"
+    elif level == "pattern-abstracted":
+        return "high-growth tech company"
+    else:  # blackout
+        return "[Company Name Redacted]"
+
+
+def _abstract_metric(metric: str, level: str) -> str:
+    """Abstract specific metrics based on NDA level."""
+    if level in ("domain-abstracted", "pattern-abstracted"):
+        if '%' in metric:
+            return "~9%+ (directional)"
+        if '$' in metric:
+            return "$XM+ ARR"
+        if any(c.isdigit() for c in metric):
+            return "10K+"
+    elif level == "blackout":
+        return "[Metric Redacted]"
+    return metric
+
+
+def reorder_sections(latex: str, role: str = "") -> str:
+    """
+    Reorder LaTeX sections based on target role and mode.
+    Uses SECTION_ORDER mapping for different role types.
+    """
+    # Determine which order to use
+    role_lower = role.lower()
+    if 'engineer' in role_lower or 'developer' in role_lower:
+        order = SECTION_ORDER.get("software-engineer", SECTION_ORDER["ats-max"])
+    elif 'product manager' in role_lower or 'pm' in role_lower:
+        order = SECTION_ORDER.get("product-manager", SECTION_ORDER["designer-polish"])
+    elif 'director' in role_lower or 'vp' in role_lower or 'engineering manager' in role_lower:
+        order = SECTION_ORDER.get("engineering-leadership", SECTION_ORDER["designer-polish"])
+    elif 'designer' in role_lower:
+        order = SECTION_ORDER["designer-polish"]
+    else:
+        order = SECTION_ORDER["ats-max"]
+
+    # Extract all sections
+    sections = {}
+    pattern = r'(\\section\*\{([^}]+)\}(.*?))(?=\\section\*\{|$)'
+    matches = list(re.finditer(pattern, latex, re.DOTALL))
+
+    if not matches:
+        return latex
+
+    # Get preamble (everything before first section)
+    preamble_end = matches[0].start()
+    preamble = latex[:preamble_end]
+
+    # Extract section content
+    for match in matches:
+        full_section = match.group(1)
+        section_name = match.group(2)
+        section_content = match.group(3)
+        sections[section_name] = full_section
+
+    # Rebuild in order
+    result = preamble
+    for section_name in order:
+        if section_name in sections:
+            result += sections[section_name]
+
+    # Add any remaining sections not in order
+    for section_name, content in sections.items():
+        if section_name not in order:
+            result += content
+
+    return result
+
+
+def apply_audience_aware(latex: str, job_analysis) -> str:
+    """
+    Apply audience-aware rewriting for 4 audiences: HR, Hiring Manager, Tech Lead, Executive.
+    Injects audience-specific clarifications and emphasis.
+    """
+    if isinstance(job_analysis, str):
+        try:
+            job = json.loads(job_analysis)
+        except:
+            job = {}
+    elif isinstance(job_analysis, dict):
+        job = job_analysis
+    else:
+        job = {}
+
+    # Determine primary audience from job analysis
+    company_size = job.get('company_intel', {}).get('size', 'Unknown')
+    role = job.get('role_title', '')
+
+    # Apply rewrites for each audience
+    result = latex
+    for audience, config in AUDIENCE_REWRITE_MAP.items():
+        result = _apply_audience_rewrites(result, audience, config, role)
+
+    return result
+
+
+def _apply_audience_rewrites(latex: str, audience: str, config: dict, role: str) -> str:
+    """Apply specific audience rewrite patterns."""
+    result = latex
+    for pattern, replacement in config['patterns']:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    return result
+
+
+def auto_calibrate_density(latex: str, job_analysis: dict, mode: Literal["ats-max", "designer-polish"] = "designer-polish") -> str:
+    """Convenience wrapper: calibrate using keyword_targets from job analysis."""
+    targets = job_analysis.get('keyword_targets', {}) if isinstance(job_analysis, dict) else {}
+    return calibrate_density(latex, targets, mode)
+
+
+def inject_keywords(latex: str, injection_map: dict, mode: Literal["ats-max", "designer-polish"] = "designer-polish") -> str:
+    """
+    Inject keywords from injection map into LaTeX resume at optimal locations.
+    Priority sections: summary, skills, experience (recent roles first).
+    """
+    result = latex
+
+    for keyword, target_section in injection_map.items():
+        priority = target_section.get('priority', 'medium') if isinstance(target_section, dict) else 'medium'
+        section = target_section.get('section', 'skills') if isinstance(target_section, dict) else target_section
+        variant = target_section.get('variant', keyword) if isinstance(target_section, dict) else keyword
+
+        if section == 'summary':
+            result = inject_into_summary(result, keyword, variant)
+        elif section == 'skills':
+            result = inject_into_skills(result, keyword, variant)
+        elif section.startswith('experience:'):
+            idx = int(section.split(':')[1])
+            result = inject_into_experience(result, keyword, idx, variant)
+        elif section == 'auto':
+            # Auto-detect best section based on priority
+            if priority == 'critical':
+                result = inject_into_summary(result, keyword, variant)
+                result = inject_into_skills(result, keyword, variant)
+            elif priority == 'high':
+                result = inject_into_skills(result, keyword, variant)
+                result = inject_into_experience(result, keyword, 0, variant)
+            else:
+                result = inject_into_skills(result, keyword, variant)
+
+    return result
+
+
+def inject_into_summary(latex: str, keyword: str, variant: str) -> str:
+    """Inject keyword/variant into Professional Summary section."""
+    # Find Professional Summary section
+    pattern = r'(\\section\*\{Professional Summary\}(.*?))(?=\\section\*\{|$)'
+    match = re.search(pattern, latex, re.DOTALL)
+    if not match:
+        return latex
+
+    summary_content = match.group(2)
+    # Add keyword at end of summary if not already present
+    if variant.lower() not in summary_content.lower():
+        # Find last sentence and append
+        new_content = summary_content.rstrip()
+        if not new_content.endswith('.'):
+            new_content += '.'
+        new_content += f' {variant}.'
+        result = latex[:match.start(2)] + new_content + latex[match.end(2):]
+        return result
     return latex
 
 
-def get_variant(keyword: str) -> str:
-    for k, variants in VARIANT_MAP.items():
-        if keyword.lower() == k or keyword.lower() in [v.lower() for v in variants]:
-            return variants[0] if variants else keyword
-    return keyword
+def inject_into_skills(latex: str, keyword: str, variant: str) -> str:
+    """Inject keyword/variant into Skills section."""
+    # Find Skills section
+    pattern = r'(\\section\*\{Skills\}(.*?))(?=\\section\*\{|$)'
+    match = re.search(pattern, latex, re.DOTALL)
+    if not match:
+        return latex
+
+    skills_content = match.group(2)
+    if variant.lower() in skills_content.lower():
+        return latex
+
+    # Find a skill line (usually \item or bullet) and append variant
+    lines = skills_content.split('\n')
+    for i, line in enumerate(lines):
+        if r'\item' in line or r'\textbullet' in line:
+            # Append to this skill line
+            lines[i] = line.rstrip() + f', {variant}'
+            break
+    else:
+        # No skill line found, add new item
+        lines.insert(1, f'\\item {variant}')
+
+    new_content = '\n'.join(lines)
+    result = latex[:match.start(2)] + new_content + latex[match.end(2):]
+    return result
+
+
+def inject_into_experience(latex: str, keyword: str, role_index: int, variant: str) -> str:
+    """Inject keyword/variant into specific experience role."""
+    # Find all role entries
+    pattern = r'\\roleentry\{([^}]+)\}\{([^}]+)\}\{([^}]+)\}(.*?)(?=\\roleentry\{|\\section\*\{|$)'
+    matches = list(re.finditer(pattern, latex, re.DOTALL))
+
+    if role_index >= len(matches) or not matches:
+        return latex
+
+    match = matches[role_index]
+    content = match.group(4)
+
+    if variant.lower() in content.lower():
+        return latex
+
+    # Find last bullet point and append
+    bullet_pattern = r'(\\item .*?)(?=\\item|$)'
+    bullets = list(re.finditer(bullet_pattern, content, re.DOTALL))
+
+    if bullets:
+        last_bullet = bullets[-1]
+        new_bullet_content = last_bullet.group(1).rstrip() + f' {variant}.'
+        new_content = content[:last_bullet.start(1)] + new_bullet_content + content[last_bullet.end(1):]
+    else:
+        # No bullets, add after role entry
+        new_content = content.rstrip() + f'\\item {variant}.\n'
+
+    result = latex[:match.start(4)] + new_content + latex[match.end(4):]
+    return result
 
 
 def upgrade_verbs(latex: str) -> str:
-    """Replace all Tier 3 verbs with Tier 2 equivalents"""
+    """Upgrade weak verbs to stronger action verbs in bullet points."""
+    result = latex
+
+    # Only upgrade in bullet points (experience sections)
     for pattern, replacement in TIER2_REPLACEMENTS.items():
-        latex = re.sub(pattern, replacement, latex, flags=re.IGNORECASE)
-    return latex
+        # Only replace in bullet points
+        def replacer(match):
+            full_line = match.group(0)
+            # Only replace if line starts with bullet
+            if re.match(r'^\\s*\\\\item', full_line) or re.match(r'^\\s*\\\\textbullet', full_line):
+                return re.sub(pattern, replacement, full_line, flags=re.IGNORECASE)
+            return full_line
+
+        result = re.sub(r'\\\\item.*?$', replacer, result, flags=re.MULTILINE)
+
+    return result
 
 
 def add_signal_tags(latex: str, taxonomy_path: str = None) -> str:
-    """Add \\signaltag{} macros to bullets based on taxonomy triggers"""
+    """
+    Add signal tags to bullets in experience section.
+    Tags are injected as inline badges: [\textbf{Signal-Tag}]
+    """
     if taxonomy_path:
+        import json
         with open(taxonomy_path) as f:
             taxonomy = json.load(f)
-        tags_info = {t['key']: t for t in taxonomy.get('tags', [])}
     else:
-        # Fallback minimal triggers
-        tags_info = {
-            "data-informed-iteration": {"triggers": ["A/B", "conversion", "p<", "n=", "experiment", "metrics"]},
-            "cross-functional-leadership": {"triggers": ["cross-functional", "led", "directed", "facilitated", "stakeholder"]},
-            "systems-thinking": {"triggers": ["design system", "component library", "tokens", "storybook", "coverage"]},
-            "technical-fluency": {"triggers": ["React", "TypeScript", "pair-program", "Storybook", "code", "prototype"]},
-            "user-research-rigor": {"triggers": ["interview", "usability", "JTBD", "synthesis", "Dovetail"]},
-            "accessibility-advocacy": {"triggers": ["WCAG", "accessibility", "a11y", "screen reader", "keyboard"]},
-            "craft-polish": {"triggers": ["motion", "animation", "micro-interaction", "edge case", "design QA"]},
-            "zero-to-one-ambiguity": {"triggers": ["0 to 1", "0→1", "from scratch", "greenfield", "v1", "strategy"]},
-            "strategic-influence": {"triggers": ["roadmap", "budget", "VP", "executive", "memo", "hiring", "prioritization"]},
-            "mentorship-culture": {"triggers": ["mentor", "promoted", "hiring panel", "ritual", "culture", "onboard"]},
+        # Default taxonomy inline
+        taxonomy = {
+            "signal_tags": {
+                "data-informed-iteration": ["metrics", "data-driven", "analytics", "A/B test", "experiment"],
+                "cross-functional-leadership": ["cross-functional", "cross-team", "stakeholder", "partner"],
+                "systems-thinking": ["architecture", "system design", "scalability", "platform"],
+                "technical-fluency": ["code", "engineering", "technical", "implementation"],
+                "user-research-rigor": ["user research", "usability", "user interview", "discovery"],
+                "accessibility-advocacy": ["accessibility", "a11y", "WCAG", "inclusive"],
+                "craft-polish": ["polish", "craft", "detail", "pixel-perfect", "delight"],
+                "zero-to-one-ambiguity": ["zero-to-one", "greenfield", "ambiguity", "from scratch"],
+                "strategic-influence": ["strategy", "roadmap", "vision", "influence", "direction"],
+                "mentorship-culture": ["mentor", "coach", "grow", "team building", "culture"]
+            }
         }
 
-    bullets = re.findall(r'(\\bulletitem\s*(?:\{[^}]+\}|[^\n]*))', latex)
-    for bullet in bullets:
-        if '\\signaltag{' in bullet:
-            continue  # Already tagged
+    result = latex
+    signal_triggers = taxonomy.get("signal_tags", {})
 
-        matched_tags = []
-        for tag_key, info in tags_info.items():
-            for trigger in info.get('triggers', []):
-                if re.search(rf'\b{re.escape(trigger)}\b', bullet, re.IGNORECASE):
-                    matched_tags.append(tag_key)
-                    break
+    # Find all role entries and their bullet points
+    pattern = r'(\\roleentry\{[^}]+\}\{[^}]+\}\{[^}]+\})(.*?)(?=\\roleentry\{|\\section\*\{|$)'
+    matches = list(re.finditer(pattern, result, re.DOTALL))
 
-        if matched_tags:
-            # Add up to 3 tags at end of bullet
-            tag_macros = ' '.join(f'\\signaltag{{{t}}}' for t in matched_tags[:3])
-            new_bullet = bullet.rstrip(' .') + f' {tag_macros}.'
-            latex = latex.replace(bullet, new_bullet, 1)
+    for match in matches:
+        role_header = match.group(1)
+        bullets_content = match.group(2)
 
-    return latex
+        # Find bullets
+        bullet_pattern = r'(\\item\s+.*?)(?=\\item|$)'
+        bullet_matches = list(re.finditer(bullet_pattern, bullets_content, re.DOTALL))
 
+        modified_bullets = bullets_content
+        offset = 0
 
-def apply_nda_abstraction(latex: str, level: str = "pattern-abstracted") -> str:
-    """Apply NDA abstraction ladder to sanitize confidential content"""
-    levels = {
-        "public": 0,
-        "category": 1,
-        "domain+scale": 2,
-        "problem+outcome": 3,
-        "pattern-abstracted": 3,
-        "outcome-only": 4,
-        "full-blackout": 4,
-    }
-    target_level = levels.get(level, 3)
+        for bm in bullet_matches:
+            bullet_text = bm.group(1)
+            tags_to_add = []
 
-    # Pattern replacements
-    patterns = {
-        1: {r'\b(Stripe|Airbnb|Google|Meta|Amazon|Microsoft|Apple)\b': 'Major Tech Company'},
-        2: {
-            r'\b(Stripe|PayPal|Square|Adyen)\b': 'High-volume fintech payment platform (10M+ txn/day)',
-            r'\b(Airbnb|Booking|Expedia)\b': 'Global marketplace platform (100M+ users)',
-        },
-        3: {
-            r'\\kw\{(Stripe|Airbnb|Google)\}': r'\\kw{Major payments platform}',
-            r'(\d+)\s*M\+?\s*(merchants|users|transactions)': r'\\metric{\1M+ \2}',
-        }
-    }
+            for tag, triggers in signal_triggers.items():
+                for trigger in triggers:
+                    if re.search(rf'\b{re.escape(trigger)}\b', bullet_text, re.IGNORECASE):
+                        tags_to_add.append(tag)
+                        break  # One tag per bullet max
 
-    for lvl in range(1, target_level + 1):
-        for pattern, replacement in patterns.get(lvl, {}).items():
-            latex = re.sub(pattern, replacement, latex)
+            if tags_to_add and len(tags_to_add) > 0:
+                tag_str = ' '.join(f'[\\textbf{{{tag}}}]' for tag in tags_to_add[:2])  # Max 2 tags
+                # Append tag to end of bullet
+                new_bullet = bullet_text.rstrip() + f' {tag_str}'
+                start = match.start(2) + bm.start(1) + offset
+                end = match.start(2) + bm.end(1) + offset
+                modified_bullets = modified_bullets[:bm.start(1)] + new_bullet + modified_bullets[bm.end(1):]
+                offset += len(new_bullet) - len(bullet_text)
 
-    return latex
+        # Reconstruct
+        result = result[:match.start(2)] + modified_bullets + result[match.end(2):]
+
+    return result
 
 
-def reorder_sections(latex: str, role: str) -> str:
-    """Reorder sections per career stage + target role rules"""
-    # Extract all sections
-    sections = {}
-    pattern = r'(\\section\*\{[^}]+\}.*?)(?=\\section\*\{|\Z)'
-    for match in re.finditer(pattern, latex, re.DOTALL):
-        header = re.match(r'\\section\*\{([^}]+)\}', match.group(1))
-        if header:
-            sections[header.group(1)] = match.group(1)
-
-    # Determine order
-    role_lower = role.lower()
-    if 'engineer' in role_lower or 'developer' in role_lower:
-        order = ['Professional Summary', 'Skills', 'Work Experience', 'Education', 'Certifications', 'Projects']
-    elif 'design' in role_lower:
-        order = ['Professional Summary', 'Skills', 'Work Experience', 'Education', 'Certifications', 'Projects']
-    elif 'product' in role_lower:
-        order = ['Professional Summary', 'Work Experience', 'Skills', 'Education', 'Certifications', 'Projects']
-    else:
-        order = ['Professional Summary', 'Skills', 'Work Experience', 'Education', 'Certifications', 'Projects']
-
-    # Rebuild
-    rebuilt = []
-    # Keep preamble (before first section)
-    preamble = latex.split('\\section*{Professional Summary}')[0]
-    rebuilt.append(preamble)
-
-    for name in order:
-        if name in sections:
-            rebuilt.append(sections[name])
-
-    return '\n'.join(rebuilt)
-
-
-def apply_audience_aware(latex: str, job_analysis: str) -> str:
-    """Apply HR/CEO/Manager/Lead comprehension transforms"""
-    with open(job_analysis) as f:
-        job = json.load(f)
-
-    # First-use acronym expansion
-    acronyms = {
-        'A/B': 'A/B testing (controlled experiments comparing two versions)',
-        'WCAG': 'WCAG (Web Content Accessibility Guidelines)',
-        'JTBD': 'JTBD (Jobs to Be Done — user needs framework)',
-        'PCI-DSS': 'PCI-DSS (payment security standard)',
-        'KYC': 'KYC (Know Your Customer — identity verification)',
-        'AML': 'AML (Anti-Money Laundering)',
-        'ARR': 'ARR (Annual Recurring Revenue)',
-        'CI/CD': 'CI/CD (automated testing and deployment)',
-        'RICE': 'RICE (prioritization framework: Reach, Impact, Confidence, Effort)',
-    }
-
-    # Expand first use in each section
-    sections = re.split(r'(\\section\*\{[^}]+\})', latex)
-    seen_acronyms = set()
-    for i, section in enumerate(sections):
-        if section.startswith('\\section*'):
-            continue
-        for acronym, expansion in acronyms.items():
-            if acronym in section and acronym not in seen_acronyms:
-                sections[i] = section.replace(acronym, f'{acronym} ({expansion})', 1)
-                seen_acronyms.add(acronym)
-
-    latex = ''.join(sections)
-
-    # Add context to bare numbers
-    def add_context(match):
-        num = match.group(1)
-        context = match.group(2) or ""
-        if not re.search(r'\b(users|merchants|teams|components|years|months|K|M|B|%)\b', context, re.I):
-            return f'{num} users'  # default fallback
-        return match.group(0)
-
-    latex = re.sub(r'(\b\d+(?:\.\d+)?\b)\s*([^.]*)\.', add_context, latex)
-
-    return latex
-
-
-def auto_calibrate_density(latex: str, job_analysis: str | dict, mode: Literal["ats-max", "designer-polish"]) -> str:
-    """Full post-rewrite calibration: inject → calibrate → verify"""
-    if isinstance(job_analysis, str):
-        with open(job_analysis) as f:
-            job = json.load(f)
-    else:
-        job = job_analysis
-
-    targets = job.get('keyword_targets', {})
-    # Phase 1: Inject missing/under-density keywords
-    injection_map = build_injection_map_from_targets(latex, targets)
-    latex = inject_keywords(latex, injection_map, mode)
-    # Phase 2: Calibrate
-    latex = calibrate_density(latex, targets, mode)
-    # Phase 3: Upgrade verbs
-    latex = upgrade_verbs(latex)
-    # Phase 4: Add signal tags
-    latex = add_signal_tags(latex)
-    return latex
-
-
-def build_injection_map_from_targets(latex: str, targets: dict) -> dict:
-    """Generate injection map from current density vs targets"""
-    text = latex_to_plain(latex)
-    injections = []
-    for kw, target in targets.items():
-        actual = keyword_density(text, kw)
-        if actual >= target['min']:
-            continue
-        needed = max(1, int((target['min'] - actual) * len(text.split()) / 100))
-        locations = ["summary", "skills"]
-        for i in range(min(needed, 3)):
-            locations.append(f"experience:{i}")
-        injections.append({
-            "keyword": kw,
-            "target_density": target['min'],
-            "current_density": round(actual, 2),
-            "locations": locations,
-            "variant": get_variant(kw)
-        })
-    return {"injections": injections}
-
-
-def optimize_resume(latex: str, injection_map: dict, mode: Literal["ats-max", "designer-polish"]) -> str:
-    """Main optimization pipeline"""
+def optimize_resume(latex: str, injection_map: dict, mode: Literal["ats-max", "designer-polish"] = "designer-polish") -> str:
     latex = inject_keywords(latex, injection_map, mode)
     latex = upgrade_verbs(latex)
     latex = add_signal_tags(latex)
@@ -460,16 +580,18 @@ def optimize_resume(latex: str, injection_map: dict, mode: Literal["ats-max", "d
 
 
 if __name__ == "__main__":
+    import sys
     import argparse
-    parser = argparse.ArgumentParser()
+
+    parser = argparse.ArgumentParser(description="Optimize LaTeX resume")
     parser.add_argument("--resume", required=True)
-    parser.add_argument("--map", required=True)
+    parser.add_argument("--injection-map", required=True)
     parser.add_argument("--mode", choices=["ats-max", "designer-polish"], default="designer-polish")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
     latex = Path(args.resume).read_text()
-    with open(args.map) as f:
+    with open(args.injection_map) as f:
         injection_map = json.load(f)
 
     optimized = optimize_resume(latex, injection_map, args.mode)

@@ -120,7 +120,7 @@ python -m ats_parsers.taleo main.txt
 |------------|------------|-------|---------|-------|-------|
 | Contact info | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Summary | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Skills (all) | ✅ | ✅ | ⚠️ | ✅ | ⚠️ |
+| Skills (all) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Experience (all) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Education | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Certifications | ✅ | ✅ | ⚠️ | ✅ | ⚠️ |
@@ -129,7 +129,7 @@ python -m ats_parsers.taleo main.txt
 
 ✅ = Full extraction | ⚠️ = Partial | ❌ = Not extracted
 
-**Gate:** All ✅ sections must extract correctly. ⚠️ sections acceptable if non-critical.
+**Gate:** All required sections (Contact, Summary, Skills, Experience, Education, Dates) must extract correctly (✅). Optional sections (Certifications, Projects) may be ⚠️/❌.
 
 ### 3.4 Common Parser Failures & Fixes (LaTeX)
 
@@ -453,7 +453,6 @@ python -m ats_parsers.keyword_check main.normalized.txt job-analysis.json
 - `main-{company}-{role}-{YYYYMMDD}.pdf` — **Primary submission artifact** (pdflatex, Overleaf-compatible)
 - `main-{company}-{role}-{YYYYMMDD}.txt` — Plain text fallback (pdftotext -layout)
 - `main-{company}-{role}-{YYYYMMDD}.normalized.txt` — NFKC+ligature+bullet normalized text for parser simulation fidelity
-- `main-{company}-{role}-{YYYYMMDD}.docx` — **Fallback for portals requiring Word** (pandoc main.tex -o main.docx)
 
 ---
 

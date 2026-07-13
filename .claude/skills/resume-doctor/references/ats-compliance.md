@@ -196,7 +196,7 @@ python -m ats_parsers.taleo main.txt
 |------------|------------|-------|---------|-------|-------|
 | Contact info | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Summary | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Skills (all) | ✅ | ✅ | ⚠️ | ✅ | ⚠️ |
+| Skills (all) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Experience (all) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Education | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Certifications | ✅ | ✅ | ⚠️ | ✅ | ⚠️ |
@@ -205,7 +205,7 @@ python -m ats_parsers.taleo main.txt
 
 ✅ = Full extraction | ⚠️ = Partial | ❌ = Not extracted
 
-**Gate:** All ✅ sections must extract correctly. ⚠️ acceptable if non-critical.
+**Gate:** All required sections (Contact, Summary, Skills, Experience, Education, Dates) must extract correctly (✅). Optional sections (Certifications, Projects) may be ⚠️/❌.
 
 ---
 

@@ -22,10 +22,21 @@
         "type": "object",
         "required": ["gate", "passed", "details"],
         "properties": {
-          "gate": {"type": "string", "enum": ["format_compliance", "structure_completeness", "keyword_hygiene", "readability_baseline", "unicode_extraction", "ats_parser_simulation"]},
+          "gate": {"type": "string"},
           "passed": {"type": "boolean"},
           "details": {"type": "object"}
         }
+      }
+    },
+    "factor_scores": {"type": "object"},
+    "subagent_harness": {"type": "object"},
+    "recruiter_scorecard": {
+      "type": "object",
+      "properties": {
+        "designation_family": {"type": "string"},
+        "overall_score": {"type": "integer"},
+        "verdict": {"type": "string"},
+        "recruiter_summary": {"type": "string"}
       }
     }
   }

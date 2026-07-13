@@ -15,7 +15,10 @@ from resume_doctor.validation_gates import (
     validate_parser_simulation,
     validate_unicode_extraction,
     validate_readability,
+    ATS_SECTION_ONTOLOGY,
+    GateResult,
 )
+from resume_doctor.recruiter_scorecard import evaluate_recruiter_scorecard
 
 
 @dataclass
@@ -24,10 +27,13 @@ class ATSAuditResult:
     overall_score: int
     passed: bool
     findings: list[dict]
+    factor_scores: dict = None
+    subagent_harness: dict = None
+    recruiter_scorecard: dict = None
 
 
 def run_ats_audit(latex_path: str, output_path: Optional[str] = None) -> ATSAuditResult:
-    """Run full general ATS audit on a LaTeX resume"""
+    """Run full general ATS audit on a LaTeX resume with Multi-Factor Weighted Scoring"""
 
     # Gate 1: Format Compliance
     format_result = validate_latex_format(latex_path)
@@ -56,9 +62,30 @@ def run_ats_audit(latex_path: str, output_path: Optional[str] = None) -> ATSAudi
         ("ats_parser_simulation", parser_result),
     ]
 
-    passed_gates = sum(1 for _, r in gates if r.passed)
-    overall_score = int((passed_gates / len(gates)) * 100)
-    overall_passed = all(r.passed for _, r in gates)
+    # Multi-Factor Weighted Scoring Engine
+    s_lexical = 100 if (format_result.passed and unicode_result.passed) else int((int(format_result.passed) + int(unicode_result.passed)) * 50)
+    s_structural = 100 if (structure_result.passed and parser_result.passed) else int((int(structure_result.passed) + int(parser_result.passed)) * 50)
+    s_hygiene = 100 if hygiene_result.passed else 70
+    s_readability = 100 if readability_result.passed else 75
+
+    factor_scores = {
+        "lexical_cleanliness": s_lexical,
+        "structural_readiness": s_structural,
+        "keyword_hygiene_prominence": s_hygiene,
+        "readability_recency": s_readability
+    }
+
+    from resume_doctor.validation_gates import validate_subagent_harness
+    subagent_harness_res = validate_subagent_harness(latex_path)
+
+    with open(latex_path, 'r', encoding='utf-8') as f:
+        latex_content = f.read()
+    plain_text = latex_to_plain(latex_content)
+    scorecard_obj = evaluate_recruiter_scorecard(plain_text)
+    recruiter_scorecard_res = asdict(scorecard_obj)
+
+    overall_score = int(0.25 * s_lexical + 0.25 * s_structural + 0.25 * s_hygiene + 0.25 * s_readability)
+    overall_passed = all(r.passed for _, r in gates) and bool(subagent_harness_res.get("overall_passed", False))
 
     findings = []
     for gate_name, result in gates:
@@ -67,16 +94,24 @@ def run_ats_audit(latex_path: str, output_path: Optional[str] = None) -> ATSAudi
             "passed": result.passed,
             "details": result.details
         })
+    findings.append({
+        "gate": "5_subagent_validation_harness",
+        "passed": bool(subagent_harness_res.get("overall_passed", False)),
+        "details": subagent_harness_res
+    })
 
     result = ATSAuditResult(
         meta={
-            "resume_file": latex_path,
+            "resume_file": str(latex_path),
             "audited_at": datetime.utcnow().isoformat() + "Z",
-            "auditor_version": "2.0.0"
+            "auditor_version": "2.2.0"
         },
         overall_score=overall_score,
         passed=overall_passed,
-        findings=findings
+        findings=findings,
+        factor_scores=factor_scores,
+        subagent_harness=subagent_harness_res,
+        recruiter_scorecard=recruiter_scorecard_res
     )
 
     if output_path:
@@ -87,31 +122,25 @@ def run_ats_audit(latex_path: str, output_path: Optional[str] = None) -> ATSAudi
 
 
 def validate_structure_completeness(latex_path: str):
-    """Check required sections present"""
+    """Check required sections present using Canonical ATS Section Normalization"""
     with open(latex_path, 'r', encoding='utf-8') as f:
         latex = f.read()
 
-    required = [
-        ("Professional Summary", r'\\section\*\{Professional Summary\}'),
-        ("Skills", r'\\section\*\{Skills\}'),
-        ("Work Experience", r'\\section\*\{Work Experience\}'),
-        ("Education", r'\\section\*\{Education\}'),
-    ]
+    details = {}
+    issues = []
+
+    # Check against established canonical namespaces
+    for canonical_name, patterns in ATS_SECTION_ONTOLOGY.items():
+        found = any(re.search(p, latex, re.I) for p in patterns)
+        details[canonical_name] = "PASS" if found else "FAIL"
+        if not found:
+            issues.append(f"Missing required canonical ATS section: {canonical_name}")
 
     optional = [
         ("Certifications", r'\\section\*\{Certifications\}'),
         ("Projects", r'\\section\*\{Projects\}'),
         ("Continuous Learning", r'\\section\*\{Continuous Learning\}'),
     ]
-
-    details = {}
-    issues = []
-
-    for name, pattern in required:
-        found = bool(re.search(pattern, latex))
-        details[name] = "PASS" if found else "FAIL"
-        if not found:
-            issues.append(f"Missing required section: {name}")
 
     for name, pattern in optional:
         found = bool(re.search(pattern, latex))
@@ -130,7 +159,6 @@ def validate_structure_completeness(latex_path: str):
     else:
         details["Linear flow"] = "PASS"
 
-    from resume_doctor.validation_gates import GateResult
     return GateResult("structure_completeness", len(issues) == 0, {"sections": details, "issues": issues}, [])
 
 

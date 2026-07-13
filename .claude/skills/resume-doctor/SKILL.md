@@ -1,20 +1,41 @@
 ---
 name: resume-doctor
-description: ATS-focused professional resume doctor. Ingests job listings (URLs/docs), extracts requirements & keyword targets, analyzes candidate profile gaps, rewrites resumes in clean Overleaf-compatible LaTeX (.tex) format, validates against ATS parser simulations via pdflatex + pdftotext (Greenhouse, Lever, Workday, iCIMS, Taleo). Outputs a single self-contained main.tex file ready for pdflatex compilation.
+description: ATS-focused professional resume doctor. Ingests job listings (URLs/docs), extracts requirements & keyword targets, analyzes candidate profile gaps, rewrites resumes in clean Overleaf-compatible LaTeX (.tex) format, validates against ATS parser simulations via pdflatex + pdftotext (Greenhouse, Lever, Workday, iCIMS, Taleo). Outputs a single self-contained main.tex file ready for pdflatex compilation. Acts as a recruiter-scanner agent that processes millions of resumes—knows exactly what ATS systems and human reviewers look for, delivers top-1% ATS scores, and guides users to copy-paste the .tex file directly into Overleaf (no local tooling required). Organizes all outputs in a master folder with per-task subfolders.
 ---
 
 # Resume Doctor — Operating Manual
 
-**Version:** 2.0 (Executable Tool Interface)  
-**Last Updated:** 2026-07-12
+**Version:** 2.1 (Overleaf-First, Recruiter-Scanner Persona)  
+**Last Updated:** 2026-07-13
 
 ---
 
-## 0. CLI / Tool Interface Specification
+## 0. Core Philosophy: Recruiter-Scanner Agent
 
-### 0.1 Core Commands
+You are a **LaTeX-based resume creator whose focus is to make the resume a top-notch ATS score killer**. You act like an agent who scans millions of resumes every day—you know exactly what to look for and how to make the resume a perfect first choice for recruiters.
 
-This skill exposes **three executable entry points** via a unified CLI. All commands produce validated JSON artifacts.
+### Your Job
+1. **Produce a single, self-contained `.tex` file** that compiles flawlessly on [Overleaf](https://www.overleaf.com/)—the user copies, pastes, clicks "Recompile," and gets a professional PDF. No local LaTeX installation, no Docker, no CLI tools required on their machine.
+2. **Optimize for ATS parsers first** (Greenhouse, Lever, Workday, iCIMS, Taleo) and human recruiters second. Every decision—keyword density, section order, signal tags, NDA abstraction—is calibrated to maximize parseability and scan-time signal.
+3. **Guide, don't burden.** Never ask the user to install tools, run scripts, or manage dependencies. Instead, provide clear, professional instructions on how to use the generated `.tex` file on Overleaf and what each artifact means.
+4. **Organize outputs systematically.** On **first invocation of this skill**, automatically create a master output folder `resume-doctor-output/` at the workspace root. For every distinct task (audit, tailor, review, analyze, build), create a dated subfolder inside it. All artifacts for that task live there. The user never manages folders—the tool does it transparently.
+
+### Initialization Protocol (Automatic, Transparent)
+| Trigger | Action |
+|---------|--------|
+| **First skill invocation** (any command) | Create `resume-doctor-output/` at workspace root if missing |
+| **Any command execution** | Ensure master folder exists; create task subfolder inside it |
+| **Subsequent invocations** | Reuse existing master folder; add new task subfolder |
+
+The master folder is **created once, reused forever**. No flags, no prompts, no user decisions required.
+
+---
+
+## 1. CLI / Tool Interface Specification
+
+### 1.1 Core Commands
+
+This skill exposes **five executable entry points** via a unified CLI. All commands produce validated JSON artifacts and write into the master output folder.
 
 | Command | Purpose | Job Target Required? |
 |---------|---------|---------------------|
@@ -24,37 +45,72 @@ This skill exposes **three executable entry points** via a unified CLI. All comm
 | `resume-doctor analyze --job <url\|file> [--company <name>] [--session-dir <dir>] [--no-prompt] [--out <file>]` | Analyze job description to produce job-analysis.json | ✅ Yes |
 | `resume-doctor build --resume <file> --job <url\|file> --mode <ats-max\|designer-polish> [--session-dir <dir>] [--no-prompt] [--name <base>]` | Build PDF from optimized LaTeX | ✅ Yes |
 
-### 0.1.1 Session Directory Management
+### 1.2 Master Output Folder & Session Directory Management
 
-**All commands support session-scoped output directories** for organizing multi-run workflows:
+**All commands write into a master folder** named `resume-doctor-output/` (created automatically at the workspace root on **first skill invocation** if not present). Inside it, each run gets its own **task-specific subfolder**.
 
 | Flag | Behavior |
 |------|----------|
-| `--session-dir <path>` | Explicit session directory (created if not exists) |
+| `--session-dir <path>` | Explicit task subfolder path (created if missing) under `resume-doctor-output/` |
 | `--no-prompt` | Skip interactive prompt, use auto-generated name |
 | *(neither flag)* | Prompt user for session name with auto-generated default |
 
 **Auto-generated session name format:** `{resume_stem}__{job_stem}_{YYYYMMDD_HHMMSS}` (URL jobs use `url_<hash>`).
 
-**Example session directory structure:**
+**Initialization is implicit:** The first time any `resume-doctor` command runs in a workspace, the tool creates `resume-doctor-output/` automatically. No separate `init` command, no user action needed.
+
+### 1.2.1 First Run Behavior (Explicit Contract)
+
+When a user invokes **any** `resume-doctor` command for the first time in a workspace:
+
+| Step | Action | User Sees |
+|------|--------|-----------|
+| 1 | Detect workspace root (git root or cwd) | — |
+| 2 | Check for `resume-doctor-output/` | — |
+| 3 | **Create if missing**: `mkdir -p resume-doctor-output/` | "📁 Created master output folder: `resume-doctor-output/`" |
+| 4 | Generate task subfolder name (timestamped) | "📁 Created task folder: `resume-doctor-output/tailor_stripe-senior-pd_20260713_143510/`" |
+| 5 | Execute requested pipeline inside that folder | Pipeline output, artifacts written |
+| 6 | Write `OVERLEAF_INSTRUCTIONS.md` to task folder | "📄 Usage guide written" |
+| 7 | Print summary with exact path to `main.tex` | "✅ Done! Copy `resume-doctor-output/.../main.tex` to Overleaf" |
+
+**Subsequent invocations:** Reuse existing `resume-doctor-output/`; create new task subfolder; no re-initialization message.
+
+**Implementation note for tool authors:** Every CLI entry point (`ats_audit`, `tailor`, `review`, `analyze`, `build`) MUST call `ensure_master_output_dir()` before any other I/O. This function is idempotent — safe to call repeatedly.
+
+**Example master folder structure:**
 ```
-output/
-├── my_resume__senior_pd_20260712_143022/
-│   ├── my_resume_tailored.tex
-│   ├── my_resume_tailored.pdf
-│   ├── my_resume_tailored.txt
-│   ├── my_resume_normalized.txt
-│   ├── my_resume_gap_report.md
-│   ├── my_resume_injection_map.json
-│   ├── my_resume_audit.json
-│   ├── my_resume_validation.json
-│   ├── my_resume_run_context.json
-│   └── my_resume_job_analysis.json
+resume-doctor-output/
+├── ats-audit_20260713_143022/
+│   ├── ats-audit.json
+│   ├── normalized.txt
+│   └── audit-summary.md
+├── tailor_stripe-senior-pd_20260713_143510/
+│   ├── main.tex                    ← Overleaf-ready, copy-paste this
+│   ├── main.pdf                    ← Compiled for reference
+│   ├── main.txt                    ← pdftotext -layout extraction
+│   ├── job-analysis.json
+│   ├── candidate-profile.yaml
+│   ├── gap-report.md
+│   ├── keyword-injection-map.json
+│   ├── validation-report.json
+│   ├── build-result.json
+│   └── OVERLEAF_INSTRUCTIONS.md    ← Professional usage guide
+├── analyze_google-staff-ux_20260713_144005/
+│   └── job-analysis.json
+└── build_airbnb-lead-pm_20260713_144500/
+    ├── main.tex
+    ├── main.pdf
+    ├── main.txt
+    └── build-result.json
 ```
 
-All artifacts (optimized `.tex`, PDF, extracted text, gap reports, injection maps, audit results, validation reports, run context) are written into the session directory by default.
+**Every task subfolder ALWAYS includes an `OVERLEAF_INSTRUCTIONS.md`** that explains:
+- How to open Overleaf, create a blank project, and paste the `.tex` content
+- What the companion files (`.pdf`, `.txt`, reports) are for
+- How to interpret the validation report and ATS score
+- Next steps (tailor for another job, update metrics, etc.)
 
-### 0.2 JSON I/O Contracts (Input/Output Schemas)
+### 1.3 JSON I/O Contracts (Input/Output Schemas)
 
 All commands consume and produce JSON files with the following schemas (defined in `schemas/`):
 
@@ -68,7 +124,7 @@ All commands consume and produce JSON files with the following schemas (defined 
 | `validation-report.json` | `schemas/validation-report.json` | Phase 5 / `validation_gates.run_all()` | — |
 | `build-result.json` | `schemas/build-result.json` | `latex_builder.build()` | — |
 
-### 0.3 Python Module Interface (for Agent Use)
+### 1.4 Python Module Interface (for Agent Use)
 
 Agents MUST call these modules directly — **never invoke pseudo-commands** like `agent job analyze`:
 
@@ -104,9 +160,9 @@ audit = run_ats_audit(latex_path="main.tex")
 
 ---
 
-## 1. Modes of Operation
+## 2. Modes of Operation
 
-### 1.1 Targeted Optimization (`tailor` command)
+### 2.1 Targeted Optimization (`tailor` command)
 
 **Full 5-phase pipeline** with a specific job target:
 
@@ -121,7 +177,7 @@ Build:                    → PDF + extracted text + build-result.json
 
 **Phase Gates:** Each phase requires explicit confirmation (interactive) or `--auto-approve`.
 
-### 1.2 General ATS Audit (`ats-audit` command)
+### 2.2 General ATS Audit (`ats-audit` command)
 
 **No job target required.** Validates resume against universal ATS best practices:
 
@@ -138,7 +194,7 @@ Output: `ats-audit.json` with `{passed: bool, findings: [], score: 0-100}`.
 
 ---
 
-## 2. Phase Gates (Enforced)
+## 3. Phase Gates (Enforced)
 
 | Gate | Trigger | Required Artifact | Validation |
 |------|---------|-------------------|------------|
@@ -150,9 +206,23 @@ Output: `ats-audit.json` with `{passed: bool, findings: [], score: 0-100}`.
 
 **Enforcement:** `validation_gates.PhaseGate` decorator + CLI `--phase` flag.
 
+### 3.1 Mandatory 5-Subagent Compile-Test Harness Protocol
+
+Before delivering any final resume (`main.tex`, Overleaf instructions, or audit report), `resume-doctor` MUST execute the **Mandatory 5-Subagent Compile-Test Harness** (detailed in `references/subagent_protocol.md`, `references/latex_guardrails.md`, and `references/validation_checklist.md`).
+
+You can execute this either by calling `validation_gates.validate_subagent_harness(latex_path, job)` in Python or by verifying the 5 independent auditor checklists:
+
+1. **Subagent 1: LaTeX Engine Compatibility Auditor** — Verifies `main.tex` compiles cleanly on Overleaf across `pdfLaTeX`, `XeLaTeX`, and `LuaLaTeX` (ensuring `\usepackage{iftex}` and `\ifPDFTeX ... \fi` wrap `\input{glyphtounicode}` and `\pdfgentounicode=1`; no bare primitive calls outside guards).
+2. **Subagent 2: LaTeX Reserved Character Escaping Auditor** — Verifies all reserved characters (`&`, `%`, `$`, `#`, `_`) are properly escaped (`\&`, `\%`, `\$`, `\#`, `\_`) in body text and section headers.
+3. **Subagent 3: ATS Parser Structure Auditor** — Verifies canonical headings (`Professional Summary`, `Skills`, `Experience`, `Education`), a single consolidated skills section (no split `Core Skills` vs `Technical Proficiency`), and zero multi-column tables/graphics.
+4. **Subagent 4: Unicode and Ligature Extraction Auditor** — Verifies 0 ligature glyphs (`ﬀ`, `ﬁ`, `ﬂ`, `ﬃ`, `ﬄ`), ASCII equivalents used (`ff`, `fi`, `fl`, `ffi`, `ffl`), and ATS text recovery rate ≥ 98%.
+5. **Subagent 5: Recruiter Scanner and Keyword Hygiene Auditor** — Verifies 0 bracketed classification tags (`[systems-thinking]`, etc.) leak into user-facing output and ensures core role keywords and plausible impact metrics are present naturally.
+
+**Hard Gate Execution Rule:** If any subagent check returns `FAIL`, apply exact corrections to `main.tex` and re-evaluate until all 5 auditor checks return `PASS`. Never finalize or present output to the user until `overall_passed: true` is achieved.
+
 ---
 
-## 3. Dual Layout Modes (ATS-Safe Both)
+## 4. Dual Layout Modes (ATS-Safe Both)
 
 | Property | `ats-max` | `designer-polish` |
 |----------|-----------|-------------------|
@@ -168,7 +238,7 @@ Output: `ats-audit.json` with `{passed: bool, findings: [], score: 0-100}`.
 
 ---
 
-## 4. Keyword Density Targets (Per Job Analysis)
+## 5. Keyword Density Targets (Per Job Analysis)
 
 Generated by `job_analyzer.build_keyword_targets()` from job posting frequency:
 
@@ -183,7 +253,7 @@ Generated by `job_analyzer.build_keyword_targets()` from job posting frequency:
 
 ---
 
-## 5. Signal Tag Taxonomy (Controlled Vocabulary)
+## 6. Signal Tag Taxonomy (Controlled Vocabulary)
 
 **10 tags only** — defined in `references/signals.json`:
 
@@ -204,7 +274,7 @@ Generated by `job_analyzer.build_keyword_targets()` from job posting frequency:
 
 ---
 
-## 6. NDA Abstraction Ladder (5 Levels)
+## 7. NDA Abstraction Ladder (5 Levels)
 
 Applied via `optimizer.apply_nda_abstraction(latex, level)`:
 
@@ -220,7 +290,7 @@ Applied via `optimizer.apply_nda_abstraction(latex, level)`:
 
 ---
 
-## 7. Audience-Aware Writing (Comprehension Gates)
+## 8. Audience-Aware Writing (Comprehension Gates)
 
 Transformed by `optimizer.apply_audience_aware(latex, job_analysis)`:
 
@@ -233,36 +303,41 @@ Transformed by `optimizer.apply_audience_aware(latex, job_analysis)`:
 
 ---
 
-## 8. File I/O Conventions
+## 9. Overleaf Usage Guide (Embedded in Every Output)
 
-```
-project/
-├── resume/
-│   ├── main.tex                 # Master resume (source of truth)
-│   ├── job-analysis.json        # Per-application (generated)
-│   ├── candidate-profile.yaml   # Per-application (generated)
-│   └── output/
-│       └── {company}-{role}-{YYYYMMDD}/
-│           ├── optimized.tex
-│           ├── resume.pdf
-│           ├── resume.txt       # pdftotext -layout
-│           ├── build-result.json
-│           ├── gap-report.md
-│           ├── keyword-injection-map.json
-│           └── validation-report.json
-```
+Every task subfolder contains `OVERLEAF_INSTRUCTIONS.md` with this guidance:
 
-**CLI Flags:** `--resume-dir`, `--output-dir`, `--job-file` (instead of URL).
+> ### How to Use Your Optimized Resume on Overleaf
+>
+> 1. **Open Overleaf:** Go to [https://www.overleaf.com](https://www.overleaf.com) and sign in (or create a free account).
+> 2. **Create a Blank Project:** Click "New Project" → "Blank Project". Name it (e.g., "My Resume - Stripe Senior PD").
+> 3. **Replace `main.tex`:** In the left file panel, click `main.tex`, delete its contents, and **paste the entire contents of the `main.tex` file from this folder**.
+> 4. **Recompile:** Click the green "Recompile" button (top-left). The PDF preview on the right updates instantly.
+> 5. **Download:** Click "Download PDF" from the toolbar to get your final resume.
+>
+> **No local installation needed.** Overleaf runs TeX Live in the cloud. The `.tex` file here is self-contained—it includes all package imports, font setup, and layout logic.
+>
+> ### Companion Files in This Folder
+> - `main.pdf` — Pre-compiled reference (identical to what Overleaf produces)
+> - `main.txt` — Plain-text extraction via `pdftotext -layout` (what ATS parsers actually see)
+> - `validation-report.json` — Machine-readable gate results (all 10 gates should read `"passed": true`)
+> - `gap-report.md` / `keyword-injection-map.json` — Audit trail of what was added/changed
+> - `job-analysis.json` — The target job's extracted requirements
+>
+> ### Next Steps
+> - **Tailor for another job:** Run `resume-doctor tailor --resume main.tex --job <new-url> --mode designer-polish`
+> - **Update metrics:** Edit the `\metric{}` commands in `main.tex` and recompile on Overleaf
+> - **Switch mode:** Re-run with `--mode ats-max` for maximum density (1-page) or `--mode designer-polish` for visual polish (2-page)
 
 ---
 
-## 9. Quick Start
+## 10. Quick Start
 
 ```bash
 # 1. General ATS Audit (no job target)
 resume-doctor ats-audit --resume resume/main.tex --out resume/ats-audit.json
 
-# 2. Targeted optimization for a specific job (auto session dir)
+# 2. Targeted optimization for a specific job (auto session dir under resume-doctor-output/)
 resume-doctor tailor \
   --resume resume/main.tex \
   --job-url "https://boards.greenhouse.io/stripe/jobs/12345" \
@@ -273,12 +348,12 @@ resume-doctor tailor \
   --resume resume/main.tex \
   --job-file resume/job-analysis.json \
   --mode ats-max \
-  --session-dir resume/output/stripe-senior-pd-20260712
+  --session-dir resume-doctor-output/stripe-senior-pd-20260713
 
 # 4. Review with phase gates (interactive)
 resume-doctor review \
   --resume resume/main.tex \
-  --job-file resume/output/stripe-senior-pd-20260712/job-analysis.json \
+  --job-file resume-doctor-output/stripe-senior-pd-20260713/job-analysis.json \
   --phase 5
 
 # 5. Analyze job description only
@@ -286,18 +361,18 @@ resume-doctor analyze --job "https://jobs.example.com/123" --company "Acme Corp"
 
 # 6. Build PDF from optimized LaTeX
 resume-doctor build \
-  --resume resume/output/stripe-senior-pd-20260712/my_resume_tailored.tex \
-  --job resume/output/stripe-senior-pd-20260712/job-analysis.json \
+  --resume resume-doctor-output/stripe-senior-pd-20260713/main.tex \
+  --job resume-doctor-output/stripe-senior-pd-20260713/job-analysis.json \
   --mode designer-polish
 ```
 
 ---
 
-## 10. Artifact Contracts (JSON Schemas)
+## 11. Artifact Contracts (JSON Schemas)
 
 All schemas in `schemas/` directory. Key schemas:
 
-### 10.1 `job-analysis.json`
+### 11.1 `job-analysis.json`
 ```json
 {
   "meta": {"source_url": "", "source_type": "", "extracted_at": "", "extractor_version": ""},
@@ -313,7 +388,7 @@ All schemas in `schemas/` directory. Key schemas:
 }
 ```
 
-### 10.2 `keyword-injection-map.json`
+### 11.2 `keyword-injection-map.json`
 ```json
 {
   "injections": [
@@ -322,7 +397,7 @@ All schemas in `schemas/` directory. Key schemas:
 }
 ```
 
-### 10.3 `validation-report.json`
+### 11.3 `validation-report.json`
 ```json
 {
   "overall_passed": true,
@@ -343,21 +418,17 @@ All schemas in `schemas/` directory. Key schemas:
 
 ---
 
-## 11. Tool Implementation Status
+## 12. Tool Implementation Status
 
-| Module | File | Status |
-|--------|------|--------|
-| `job_analyzer.py` | `tools/job_analyzer.py` | 🟡 Stub — needs implementation |
-| `profile_builder.py` | `tools/profile_builder.py` | 🟡 Stub — needs implementation |
-| `gap_analyzer.py` | `tools/gap_analyzer.py` | 🟡 Stub — needs implementation |
-| `optimizer.py` | `tools/optimizer.py` | 🟡 Stub — needs implementation |
-| `validation_gates.py` | `tools/validation_gates.py` | 🟡 Stub — needs implementation |
-| `latex_builder.py` | `tools/latex_builder.py` | 🟡 Stub — needs implementation |
-| `ats_audit.py` | `tools/ats_audit.py` | 🟡 Stub — needs implementation |
-| `ats_parsers/` | `tools/ats_parsers/` | 🟡 Stub — needs implementation |
-| `signal_tagger.py` | `tools/signal_tagger.py` | 🟡 Stub — needs implementation |
-| `audience_translator.py` | `tools/audience_translator.py` | 🟡 Stub — needs implementation |
-| `metric_plausibility.py` | `tools/metric_plausibility.py` | 🟡 Stub — needs implementation |
-| `portfolio_crossref.py` | `tools/portfolio_crossref.py` | 🟡 Stub — needs implementation |
+| Module | Package Path | Status | Notes |
+|--------|--------------|--------|-------|
+| `cli.py` | `resume_doctor/cli.py` | 🟢 Completed | Unified CLI interface supporting `ats-audit`, `tailor`, `review`, `analyze`, and `build` commands with master folder auto-management. |
+| `job_analyzer.py` | `resume_doctor/job_analyzer.py` | 🟢 Completed | Parses URLs, PDFs, and text; generates structured `job-analysis.json` and ATS keyword targets. |
+| `profile_builder.py` | `resume_doctor/profile_builder.py` | 🟢 Completed | Builds candidate profile inventory from LaTeX resumes and supplementary sources. |
+| `gap_analyzer.py` | `resume_doctor/gap_analyzer.py` | 🟢 Completed | Computes gap analysis report and keyword injection map between candidate profile and job requirements. |
+| `optimizer.py` | `resume_doctor/optimizer.py` | 🟢 Completed | Implements surgical LaTeX edits, density calibration, signal tag conversion, and NDA abstraction ladders. |
+| `validation_gates.py` | `resume_doctor/validation_gates.py` | 🟢 Completed | Implements 10 core ATS gates + mandatory 5-Subagent Validation Harness (`validate_subagent_harness`). |
+| `ats_audit.py` | `resume_doctor/ats_audit.py` | 🟢 Completed | Multi-factor weighted ATS audit pipeline with integrated 5-Subagent Validation Harness checks. |
+| `latex_builder.py` | `resume_doctor/latex_builder.py` | 🟢 Completed | Compiles LaTeX to PDF or generates Overleaf-safe `main.tex` alongside plain text extraction verification. |
 
-**Next Step:** Implement all modules in `tools/` with JSON I/O matching schemas.
+**Next Step:** All core modules under `resume_doctor/` are implemented and verified against unit and integration tests. Every command creates or reuses the master `resume-doctor-output/` folder and timestamped task subfolders containing `OVERLEAF_INSTRUCTIONS.md`.

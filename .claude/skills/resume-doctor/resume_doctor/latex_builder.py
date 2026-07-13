@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict
 import subprocess
 import os
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -25,20 +26,42 @@ class BuildResult:
     errors: list[str]
     page_count: int
 
+    def model_dump(self) -> dict:
+        return asdict(self)
 
-def build_resume(latex: str, job_analysis: str, mode: str = "designer-polish",
+    def model_dump_json(self, indent: int = 2) -> str:
+        return json.dumps(asdict(self), indent=indent, default=str)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+
+def build_resume(latex: str, job_analysis: dict, mode: str = "designer-polish",
                  output_dir: str = None, base_name: str = None) -> BuildResult:
-    """Compile LaTeX → PDF → text extraction pipeline"""
+    """Compile LaTeX → PDF → text extraction pipeline.
+
+    Args:
+        latex: LaTeX source string (not a path)
+        job_analysis: JobAnalysis dict (not a file path)
+        mode: "ats-max" or "designer-polish"
+        output_dir: Output directory (default: temp dir)
+        base_name: Base filename (default: derived from job)
+    """
+
+    # Ensure \kw command and engine-safe Overleaf preamble guards are present
+    latex = _ensure_kw_command(latex)
+    latex = ensure_engine_safe_preamble(latex)
 
     if output_dir is None:
         output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
 
     if base_name is None:
-        with open(job_analysis) as f:
-            job = json.load(f)
-        company = job.get('company', 'company').replace(' ', '-').lower()
-        role = job.get('role_title', 'role').replace(' ', '-').lower()
+        company = job_analysis.get('company', 'company').replace(' ', '-').lower()
+        role = job_analysis.get('role_title', 'role').replace(' ', '-').lower()
         base_name = f"{company}-{role}-{datetime.now().strftime('%Y%m%d')}"
 
     tex_path = os.path.join(output_dir, f"{base_name}.tex")
@@ -106,7 +129,8 @@ def build_resume(latex: str, job_analysis: str, mode: str = "designer-polish",
                 text=True,
                 timeout=10
             )
-            page_count = result.stdout.count('\f') + 1
+            form_feeds = result.stdout.count('\f')
+            page_count = max(1, form_feeds) if form_feeds > 0 else 1
         except:
             page_count = 1
 
@@ -142,9 +166,84 @@ def build_resume(latex: str, job_analysis: str, mode: str = "designer-polish",
     )
 
 
+def _ensure_kw_command(latex: str) -> str:
+    """Ensure \\kw command is defined in preamble."""
+    if r'\newcommand{\kw}' in latex:
+        return latex
+
+    # Find \begin{document} and insert before it
+    pattern = r'(\\begin\{document\})'
+    match = re.search(pattern, latex)
+    if not match:
+        return latex
+
+    kw_def = r'\newcommand{\kw}[1]{\textbf{#1}}'
+    insert_pos = match.start()
+    return latex[:insert_pos] + kw_def + '\n' + latex[insert_pos:]
+
+
+def escape_latex_special_chars(text: str) -> str:
+    """Escape LaTeX reserved characters (&, %, $, #, _) in body text."""
+    text = re.sub(r'(?<!\\)&', r'\\&', text)
+    text = re.sub(r'(?<!\\)%', r'\\%', text)
+    text = re.sub(r'(?<!\\)\$', r'\\$', text)
+    text = re.sub(r'(?<!\\)#', r'\\#', text)
+    text = re.sub(r'(?<!\\)_', r'\\_', text)
+    return text
+
+
+def ensure_engine_safe_preamble(latex: str) -> str:
+    r"""Ensure engine-safe Overleaf preamble guards (\ifPDFTeX / \ifpdf) around PDF-specific settings."""
+    has_glyph = '\\input{glyphtounicode}' in latex
+    has_pdfgen = '\\pdfgentounicode=1' in latex
+    is_guarded = bool(re.search(r'\\if(PDFTeX|pdf)[\s\S]*?(\\input\{glyphtounicode\}|\\pdfgentounicode=1)[\s\S]*?\\fi', latex))
+
+    if (has_glyph or has_pdfgen) and not is_guarded:
+        if '\\usepackage{iftex}' not in latex:
+            match = re.search(r'\\documentclass.*?\n', latex)
+            if match:
+                insert_pos = match.end()
+                latex = latex[:insert_pos] + "\\usepackage{iftex}\n" + latex[insert_pos:]
+
+        # Replace combined or standalone occurrences with guarded version
+        if re.search(r'\\input\{glyphtounicode\}\s*\\pdfgentounicode=1', latex):
+            latex = re.sub(
+                r'\\input\{glyphtounicode\}\s*\\pdfgentounicode=1',
+                lambda _: "\\ifPDFTeX\n  \\input{glyphtounicode}\n  \\pdfgentounicode=1\n\\fi",
+                latex
+            )
+        elif has_glyph:
+            latex = re.sub(
+                r'\\input\{glyphtounicode\}',
+                lambda _: "\\ifPDFTeX\n  \\input{glyphtounicode}\n\\fi",
+                latex
+            )
+        elif has_pdfgen:
+            latex = re.sub(
+                r'\\pdfgentounicode=1',
+                lambda _: "\\ifPDFTeX\n  \\pdfgentounicode=1\n\\fi",
+                latex
+            )
+
+    if '\\usepackage{microtype}' not in latex:
+        match = re.search(r'\\documentclass.*?\n', latex)
+        if match:
+            insert_pos = match.end()
+            latex = latex[:insert_pos] + "\\usepackage{microtype}\n" + latex[insert_pos:]
+    return latex
+
+
 def read_file(path: str) -> str:
     with open(path, 'r', encoding='utf-8') as f:
         return f.read()
+
+
+def repair_kerning_splits(text: str) -> str:
+    """Repair PDF extraction kerning artifacts where uppercase letters are split from lowercase stems."""
+    text = re.sub(r'\b([B-HJ-Z])\s+([a-z]{2,})\b', r'\1\2', text)
+    text = re.sub(r'\b(A)\s+(rchitecture|ccessibility|nalysis|pplications?|udits?|gile|ws|zure)\b', r'\1\2', text, flags=re.I)
+    text = re.sub(r'\b(I)\s+(nteractive|nformation|nterfaces?|mplementations?|terations?|cims|ntegrations?)\b', r'\1\2', text, flags=re.I)
+    return text
 
 
 def normalize_for_parsing(text: str) -> str:
@@ -156,6 +255,7 @@ def normalize_for_parsing(text: str) -> str:
     ligatures = {'ﬀ': 'ff', 'ﬁ': 'fi', 'ﬂ': 'fl', 'ﬃ': 'ffi', 'ﬄ': 'ffl'}
     for k, v in ligatures.items():
         text = text.replace(k, v)
+    text = repair_kerning_splits(text)
     text = re.sub(r'[•‣▶◆◀◦▪▫●○✓✔➡\-–—*●]+', '-', text)
     text = re.sub(r'[–—]', '--', text)
     return text

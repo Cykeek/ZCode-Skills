@@ -5,6 +5,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 import yaml
 import re
+import json
 
 
 @dataclass
@@ -22,6 +23,18 @@ class CandidateProfile:
     linkedin_url: str = ""
     github_url: str = ""
 
+    def model_dump(self) -> dict:
+        return asdict(self)
+
+    def model_dump_json(self, indent: int = 2) -> str:
+        return json.dumps(asdict(self), indent=indent, default=str)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
 
 def parse_latex_resume(tex_path: str) -> dict:
     """Extract structured data from master LaTeX resume"""
@@ -30,11 +43,16 @@ def parse_latex_resume(tex_path: str) -> dict:
 
     # Extract name
     name_match = re.search(r'\\name\{([^}]+)\}', content)
-    name = name_match.group(1) if name_match else ""
+    if name_match:
+        name = name_match.group(1)
+    else:
+        # Fallback for standard LaTeX or extracted text
+        author_match = re.search(r'\\author\{([^}]+)\}', content)
+        name = author_match.group(1) if author_match else "Candidate Name"
 
     # Extract headline
     headline_match = re.search(r'\\headline\{([^}]+)\}', content)
-    headline = headline_match.group(1) if headline_match else ""
+    headline = headline_match.group(1) if headline_match else "Professional Resume"
 
     # Extract contact
     contact = {}
@@ -67,6 +85,22 @@ def parse_latex_resume(tex_path: str) -> dict:
             "bullets": bullets,
             "signals": signals
         })
+
+    if not experience:
+        # Fallback for standard LaTeX experience section
+        exp_sec = re.search(r'\\section\*?\{(?:Work|Professional)?\s*Experience\}(.*?)(?:\\section|$)', content, re.DOTALL | re.I)
+        if exp_sec:
+            bullets = [re.sub(r'\\[a-zA-Z]+\*?(?:\{[^}]*\})?', '', b).strip() for b in re.findall(r'\\item\s+([^\n\\]+)', exp_sec.group(1))]
+            bullets = [b for b in bullets if len(b) > 3]
+            if bullets:
+                experience.append({
+                    "company": "Experience Record",
+                    "role": "Professional Role",
+                    "location": "",
+                    "dates": "2020 – Present",
+                    "bullets": bullets,
+                    "signals": []
+                })
 
     # Extract education
     education = []
@@ -127,6 +161,14 @@ def parse_latex_resume(tex_path: str) -> dict:
                 skills['domain_knowledge'].extend(kws)
             else:
                 skills['soft_skills'].extend(kws)
+
+        if not any(skills.values()):
+            # Fallback: extract plain items or comma-separated terms
+            raw_items = re.findall(r'\\item\s+([^\n]+)', skill_text)
+            for item in raw_items:
+                cleaned = re.sub(r'\\[a-zA-Z]+\*?(?:\{[^}]*\})?', '', item).strip()
+                if cleaned:
+                    skills['hard_skills'].extend([s.strip() for s in re.split(r'[,|–-]', cleaned) if len(s.strip()) > 1])
 
     # Calculate total years from experience dates
     total_years = 0

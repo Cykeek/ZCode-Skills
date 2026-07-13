@@ -16,8 +16,13 @@ from .job_analyzer import (
     analyze_job,
     gather_company_intel,
     build_keyword_targets,
+    load_role_template,
+    get_ats_keywords,
+    get_seniority_signals,
+    get_gap_triggers,
     JobAnalysis,
     CompanyIntel,
+    RoleTemplate,
 )
 
 from .profile_builder import (
@@ -31,6 +36,11 @@ from .gap_analyzer import (
     analyze_gaps,
     analyze_general_ats_gaps,
     build_injection_map,
+    HybridSkillMatcher,
+    lemmatize_phrase,
+    lemmatize_word,
+    compute_cosine_similarity,
+    get_skill_synonyms,
     GapReport,
     KeywordInjectionMap,
     Gap,
@@ -48,6 +58,10 @@ from .validation_gates import (
     validate_single_role,
     validate_summary_template,
     validate_portfolio_crossref,
+    validate_experience_overlap,
+    validate_concept_vs_shipped,
+    validate_metric_verification,
+    validate_subagent_harness,
     run_all_gates,
     GateResult,
     ValidationReport,
@@ -69,11 +83,19 @@ from .optimizer import (
 from .latex_builder import (
     build_resume,
     BuildResult,
+    escape_latex_special_chars,
+    ensure_engine_safe_preamble,
 )
 
 from .ats_audit import (
     run_ats_audit,
     ATSAuditResult,
+)
+
+from .recruiter_scorecard import (
+    evaluate_recruiter_scorecard,
+    detect_designation_family,
+    RecruiterScorecard,
 )
 
 from .signal_tagger import add_signal_tags
@@ -96,13 +118,25 @@ from .portfolio_crossref import (
     CrossRefResult,
 )
 
+from .output_manager import (
+    ensure_master_output_dir,
+    create_task_subfolder,
+    write_overleaf_instructions,
+    find_workspace_root,
+)
+
 __all__ = [
     # Job analysis
     "analyze_job",
     "gather_company_intel",
     "build_keyword_targets",
+    "load_role_template",
+    "get_ats_keywords",
+    "get_seniority_signals",
+    "get_gap_triggers",
     "JobAnalysis",
     "CompanyIntel",
+    "RoleTemplate",
 
     # Profile
     "parse_latex_resume",
@@ -114,6 +148,11 @@ __all__ = [
     "analyze_gaps",
     "analyze_general_ats_gaps",
     "build_injection_map",
+    "HybridSkillMatcher",
+    "lemmatize_phrase",
+    "lemmatize_word",
+    "compute_cosine_similarity",
+    "get_skill_synonyms",
     "GapReport",
     "KeywordInjectionMap",
     "Gap",
@@ -130,6 +169,10 @@ __all__ = [
     "validate_single_role",
     "validate_summary_template",
     "validate_portfolio_crossref",
+    "validate_experience_overlap",
+    "validate_concept_vs_shipped",
+    "validate_metric_verification",
+    "validate_subagent_harness",
     "run_all_gates",
     "GateResult",
     "ValidationReport",
@@ -149,6 +192,8 @@ __all__ = [
     # LaTeX builder
     "build_resume",
     "BuildResult",
+    "escape_latex_special_chars",
+    "ensure_engine_safe_preamble",
 
     # ATS audit
     "run_ats_audit",
@@ -171,6 +216,12 @@ __all__ = [
     "cross_reference",
     "validate_portfolio_crossref",
     "CrossRefResult",
+
+    # Output management
+    "ensure_master_output_dir",
+    "create_task_subfolder",
+    "write_overleaf_instructions",
+    "find_workspace_root",
 ]
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
